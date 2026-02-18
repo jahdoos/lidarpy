@@ -55,6 +55,21 @@ def points_to_grids(
     refl = points[:, 3]
     ts_ns = points[:, 5]
 
+    # Filter zero-distance points (no-return from LiDAR)
+    dist = x**2 + y**2 + z**2
+    nonzero = dist > 0
+    x, y, z, refl, ts_ns = x[nonzero], y[nonzero], z[nonzero], refl[nonzero], ts_ns[nonzero]
+
+    if len(ts_ns) == 0:
+        n_az = int(round((az_range[1] - az_range[0]) / az_res))
+        n_el = int(round((el_range[1] - el_range[0]) / el_res))
+        return GridResult(
+            grids=np.full((1, n_el, n_az), np.nan, dtype=np.float64),
+            timestamps=np.array([points[:, 5].mean()]),
+            az_edges=np.linspace(az_range[0], az_range[1], n_az + 1),
+            el_edges=np.linspace(el_range[0], el_range[1], n_el + 1),
+        )
+
     # --- Compute angular coordinates ---
     r_xy = np.sqrt(x**2 + y**2)
     azimuth = np.degrees(np.arctan2(x, y))       # degrees, 0 = forward (+y)
@@ -66,11 +81,10 @@ def points_to_grids(
     az_edges = np.linspace(az_range[0], az_range[1], n_az + 1)
     el_edges = np.linspace(el_range[0], el_range[1], n_el + 1)
 
-    # --- Digitize spatial bins (0 = below, n+1 = above → out of range) ---
-    az_idx = np.digitize(azimuth, az_edges) - 1   # 0..n_az-1 valid
-    el_idx = np.digitize(elevation, el_edges) - 1  # 0..n_el-1 valid
+    # --- Bin assignment: searchsorted(right) puts upper-edge values in last bin ---
+    az_idx = np.searchsorted(az_edges, azimuth, side="right") - 1
+    el_idx = np.searchsorted(el_edges, elevation, side="right") - 1
 
-    # Mask out-of-range points
     valid = (
         (az_idx >= 0) & (az_idx < n_az) &
         (el_idx >= 0) & (el_idx < n_el) &
@@ -176,6 +190,20 @@ def points_to_voxels(
     refl = points[:, 3]
     ts_ns = points[:, 5]
 
+    # Filter zero-distance points (no-return from LiDAR)
+    dist = x**2 + y**2 + z**2
+    nonzero = dist > 0
+    x, y, z, refl, ts_ns = x[nonzero], y[nonzero], z[nonzero], refl[nonzero], ts_ns[nonzero]
+
+    if len(ts_ns) == 0:
+        return VoxelResult(
+            voxels=np.full((1, nx, ny, nz), np.nan, dtype=np.float64),
+            timestamps=np.array([points[:, 5].mean()]),
+            x_edges=np.zeros(nx + 1),
+            y_edges=np.zeros(ny + 1),
+            z_edges=np.zeros(nz + 1),
+        )
+
     # --- Auto-fit spatial ranges with small padding ---
     def _auto_range(vals, rng):
         if rng is not None:
@@ -192,10 +220,10 @@ def points_to_voxels(
     y_edges = np.linspace(y_range[0], y_range[1], ny + 1)
     z_edges = np.linspace(z_range[0], z_range[1], nz + 1)
 
-    # --- Digitize spatial bins ---
-    xi = np.digitize(x, x_edges) - 1
-    yi = np.digitize(y, y_edges) - 1
-    zi = np.digitize(z, z_edges) - 1
+    # --- Bin assignment: searchsorted(right) puts upper-edge values in last bin ---
+    xi = np.searchsorted(x_edges, x, side="right") - 1
+    yi = np.searchsorted(y_edges, y, side="right") - 1
+    zi = np.searchsorted(z_edges, z, side="right") - 1
 
     valid = (
         (xi >= 0) & (xi < nx) &
