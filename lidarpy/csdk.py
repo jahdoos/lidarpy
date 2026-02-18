@@ -192,7 +192,10 @@ class CsdkLidar:
                 pass
 
     def get_frame(self, timeout: float = 1.0) -> np.ndarray:
-        """Collect packets until udp_cnt resets or timeout. Returns Nx5 array."""
+        """Collect packets until udp_cnt resets or timeout. Returns Nx6 array.
+
+        Columns: [x(m), y(m), z(m), reflectivity, tag, timestamp_us].
+        """
         parts = []
         last_udp_cnt = -1
         deadline = time.monotonic() + timeout
@@ -252,9 +255,10 @@ class CsdkLidar:
             data_type = pkt.data_type
 
             # Extract packet timestamp (8-byte LE nanoseconds) and per-point interval
+            # time_interval is in units of 0.1 µs per SDK spec
             ts_bytes = bytes(pkt.timestamp)
             base_ns = int.from_bytes(ts_bytes, "little")
-            dt_ns = pkt.time_interval  # nanoseconds between consecutive points
+            dt_100ns = pkt.time_interval  # units of 0.1 µs (100 ns)
 
             raw_ptr = ctypes.cast(
                 ctypes.addressof(pkt.data),
@@ -270,7 +274,8 @@ class CsdkLidar:
                     points[i, 2] = raw[i].z / 1000.0
                     points[i, 3] = raw[i].reflectivity
                     points[i, 4] = raw[i].tag
-                    points[i, 5] = base_ns + i * dt_ns
+                    # timestamp in µs: base_ns/1000 + i * dt_100ns/10
+                    points[i, 5] = base_ns / 1000.0 + i * (dt_100ns / 10.0)
             elif data_type == PclDataType.CARTESIAN_LOW:
                 arr_type = LivoxLidarCartesianLowRawPoint * dot_num
                 raw = ctypes.cast(raw_ptr, ctypes.POINTER(arr_type)).contents
@@ -281,7 +286,8 @@ class CsdkLidar:
                     points[i, 2] = raw[i].z / 100.0
                     points[i, 3] = raw[i].reflectivity
                     points[i, 4] = raw[i].tag
-                    points[i, 5] = base_ns + i * dt_ns
+                    # timestamp in µs: base_ns/1000 + i * dt_100ns/10
+                    points[i, 5] = base_ns / 1000.0 + i * (dt_100ns / 10.0)
             else:
                 return
             self._point_queue.put_nowait((udp_cnt, points))

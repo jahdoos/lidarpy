@@ -1,4 +1,7 @@
-"""Bin point cloud data onto 2D angular or 3D voxel grids at regular time intervals."""
+"""Bin point cloud data onto 2D angular or 3D voxel grids at regular time intervals.
+
+Timestamps in column 5 are expected in microseconds (µs).
+"""
 
 import numpy as np
 from dataclasses import dataclass
@@ -10,7 +13,7 @@ class GridResult:
 
     Attributes:
         grids: (T, H, W) array of reflectivity values; NaN = no data.
-        timestamps: (T,) array of grid timestamps in nanoseconds (center of each interval).
+        timestamps: (T,) array of grid timestamps in microseconds (center of each interval).
         az_edges: (W+1,) azimuth bin edges in degrees.
         el_edges: (H+1,) elevation bin edges in degrees.
     """
@@ -31,7 +34,7 @@ def points_to_grids(
     """Convert Nx6 point array to time-sliced reflectivity grids.
 
     Args:
-        points: Nx6 array [x, y, z, reflectivity, tag, timestamp_ns].
+        points: Nx6 array [x, y, z, reflectivity, tag, timestamp_us].
         interval_ms: Time bin width in milliseconds.
         az_range: (min, max) azimuth in degrees. HAP default ~±60°.
         el_range: (min, max) elevation in degrees. HAP default ~±12.5°.
@@ -53,14 +56,14 @@ def points_to_grids(
 
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
     refl = points[:, 3]
-    ts_ns = points[:, 5]
+    ts_us = points[:, 5]
 
     # Filter zero-distance points (no-return from LiDAR)
     dist = x**2 + y**2 + z**2
     nonzero = dist > 0
-    x, y, z, refl, ts_ns = x[nonzero], y[nonzero], z[nonzero], refl[nonzero], ts_ns[nonzero]
+    x, y, z, refl, ts_us = x[nonzero], y[nonzero], z[nonzero], refl[nonzero], ts_us[nonzero]
 
-    if len(ts_ns) == 0:
+    if len(ts_us) == 0:
         n_az = int(round((az_range[1] - az_range[0]) / az_res))
         n_el = int(round((el_range[1] - el_range[0]) / el_res))
         return GridResult(
@@ -94,9 +97,9 @@ def points_to_grids(
     az_idx = az_idx[valid]
     el_idx = el_idx[valid]
     refl = refl[valid]
-    ts_ns = ts_ns[valid]
+    ts_us = ts_us[valid]
 
-    if len(ts_ns) == 0:
+    if len(ts_us) == 0:
         return GridResult(
             grids=np.full((1, n_el, n_az), np.nan, dtype=np.float64),
             timestamps=np.array([points[:, 5].mean()]),
@@ -104,14 +107,13 @@ def points_to_grids(
             el_edges=el_edges,
         )
 
-    # --- Build time bins ---
-    interval_ns = interval_ms * 1e6
-    t_min = ts_ns.min()
-    t_max = ts_ns.max()
-    n_frames = max(1, int(np.ceil((t_max - t_min) / interval_ns)))
-    t_edges = t_min + np.arange(n_frames + 1) * interval_ns
+    # --- Build time bins (timestamps in µs, interval in ms → µs) ---
+    interval_us = interval_ms * 1e3
+    t_min = ts_us.min()
+    t_max = ts_us.max()
+    n_frames = max(1, int(np.ceil((t_max - t_min) / interval_us)))
     t_idx = np.clip(
-        ((ts_ns - t_min) / interval_ns).astype(np.int64),
+        ((ts_us - t_min) / interval_us).astype(np.int64),
         0, n_frames - 1
     )
 
@@ -125,8 +127,8 @@ def points_to_grids(
     with np.errstate(invalid="ignore"):
         grids = np.where(grids_cnt > 0, grids_sum / grids_cnt, np.nan)
 
-    # Timestamps at center of each interval
-    timestamps = t_min + (np.arange(n_frames) + 0.5) * interval_ns
+    # Timestamps at center of each interval (µs)
+    timestamps = t_min + (np.arange(n_frames) + 0.5) * interval_us
 
     return GridResult(
         grids=grids,
@@ -142,7 +144,7 @@ class VoxelResult:
 
     Attributes:
         voxels: (T, nx, ny, nz) array of mean reflectivity; NaN = no data.
-        timestamps: (T,) array of voxel grid timestamps in nanoseconds (center of each interval).
+        timestamps: (T,) array of voxel grid timestamps in microseconds (center of each interval).
         x_edges: (nx+1,) x bin edges in meters.
         y_edges: (ny+1,) y bin edges in meters.
         z_edges: (nz+1,) z bin edges in meters.
@@ -165,7 +167,7 @@ def points_to_voxels(
     """Convert Nx6 point array to time-sliced 3D voxel grids of reflectivity.
 
     Args:
-        points: Nx6 array [x, y, z, reflectivity, tag, timestamp_ns].
+        points: Nx6 array [x, y, z, reflectivity, tag, timestamp_us].
         shape: (nx, ny, nz) voxel grid dimensions.
         interval_ms: Time bin width in milliseconds.
         x_range: (min, max) x bounds in meters. Auto-fit from data if None.
@@ -188,14 +190,14 @@ def points_to_voxels(
 
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
     refl = points[:, 3]
-    ts_ns = points[:, 5]
+    ts_us = points[:, 5]
 
     # Filter zero-distance points (no-return from LiDAR)
     dist = x**2 + y**2 + z**2
     nonzero = dist > 0
-    x, y, z, refl, ts_ns = x[nonzero], y[nonzero], z[nonzero], refl[nonzero], ts_ns[nonzero]
+    x, y, z, refl, ts_us = x[nonzero], y[nonzero], z[nonzero], refl[nonzero], ts_us[nonzero]
 
-    if len(ts_ns) == 0:
+    if len(ts_us) == 0:
         return VoxelResult(
             voxels=np.full((1, nx, ny, nz), np.nan, dtype=np.float64),
             timestamps=np.array([points[:, 5].mean()]),
@@ -235,9 +237,9 @@ def points_to_voxels(
     yi = yi[valid]
     zi = zi[valid]
     refl = refl[valid]
-    ts_ns = ts_ns[valid]
+    ts_us = ts_us[valid]
 
-    if len(ts_ns) == 0:
+    if len(ts_us) == 0:
         return VoxelResult(
             voxels=np.full((1, nx, ny, nz), np.nan, dtype=np.float64),
             timestamps=np.array([points[:, 5].mean()]),
@@ -246,13 +248,13 @@ def points_to_voxels(
             z_edges=z_edges,
         )
 
-    # --- Build time bins ---
-    interval_ns = interval_ms * 1e6
-    t_min = ts_ns.min()
-    t_max = ts_ns.max()
-    n_frames = max(1, int(np.ceil((t_max - t_min) / interval_ns)))
+    # --- Build time bins (timestamps in µs, interval in ms → µs) ---
+    interval_us = interval_ms * 1e3
+    t_min = ts_us.min()
+    t_max = ts_us.max()
+    n_frames = max(1, int(np.ceil((t_max - t_min) / interval_us)))
     t_idx = np.clip(
-        ((ts_ns - t_min) / interval_ns).astype(np.int64),
+        ((ts_us - t_min) / interval_us).astype(np.int64),
         0, n_frames - 1
     )
 
@@ -266,7 +268,7 @@ def points_to_voxels(
     with np.errstate(invalid="ignore"):
         voxels = np.where(vol_cnt > 0, vol_sum / vol_cnt, np.nan)
 
-    timestamps = t_min + (np.arange(n_frames) + 0.5) * interval_ns
+    timestamps = t_min + (np.arange(n_frames) + 0.5) * interval_us
 
     return VoxelResult(
         voxels=voxels,
