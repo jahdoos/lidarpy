@@ -26,7 +26,8 @@ lidarpy/
 ├── transport.py         # CommandChannel (send/recv), DataReceiver (background thread)
 ├── pointcloud.py        # point data → NumPy Nx5 array conversion
 ├── csdk.py              # ctypes wrapper for Livox SDK2 shared lib
-└── lidar.py             # HapLidar: high-level sync/blocking API
+├── lidar.py             # HapLidar: high-level sync/blocking API
+└── webcam.py            # USB webcam image capture (V4L2/OpenCV)
 tests/
 Livox-SDK2-master/       # C++ SDK reference
 ```

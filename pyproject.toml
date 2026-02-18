@@ -7,7 +7,7 @@ name = "lidarpy"
 version = "0.1.0"
 description = "Python wrapper for Livox HAP LiDAR"
 requires-python = ">=3.9"
-dependencies = ["numpy"]
+dependencies = ["numpy", "opencv-python"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
