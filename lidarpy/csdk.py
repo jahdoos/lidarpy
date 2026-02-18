@@ -210,7 +210,7 @@ class CsdkLidar:
             if points.shape[0] > 0:
                 parts.append(points)
         if not parts:
-            return np.empty((0, 5), dtype=np.float64)
+            return np.empty((0, 6), dtype=np.float64)
         return np.vstack(parts)
 
     def get_packet(self, timeout: float = 0.1) -> np.ndarray | None:
@@ -250,6 +250,12 @@ class CsdkLidar:
             if dot_num == 0:
                 return
             data_type = pkt.data_type
+
+            # Extract packet timestamp (8-byte LE nanoseconds) and per-point interval
+            ts_bytes = bytes(pkt.timestamp)
+            base_ns = int.from_bytes(ts_bytes, "little")
+            dt_ns = pkt.time_interval  # nanoseconds between consecutive points
+
             raw_ptr = ctypes.cast(
                 ctypes.addressof(pkt.data),
                 ctypes.POINTER(ctypes.c_uint8)
@@ -257,23 +263,25 @@ class CsdkLidar:
             if data_type == PclDataType.CARTESIAN_HIGH:
                 arr_type = LivoxLidarCartesianHighRawPoint * dot_num
                 raw = ctypes.cast(raw_ptr, ctypes.POINTER(arr_type)).contents
-                points = np.empty((dot_num, 5), dtype=np.float64)
+                points = np.empty((dot_num, 6), dtype=np.float64)
                 for i in range(dot_num):
                     points[i, 0] = raw[i].x / 1000.0
                     points[i, 1] = raw[i].y / 1000.0
                     points[i, 2] = raw[i].z / 1000.0
                     points[i, 3] = raw[i].reflectivity
                     points[i, 4] = raw[i].tag
+                    points[i, 5] = base_ns + i * dt_ns
             elif data_type == PclDataType.CARTESIAN_LOW:
                 arr_type = LivoxLidarCartesianLowRawPoint * dot_num
                 raw = ctypes.cast(raw_ptr, ctypes.POINTER(arr_type)).contents
-                points = np.empty((dot_num, 5), dtype=np.float64)
+                points = np.empty((dot_num, 6), dtype=np.float64)
                 for i in range(dot_num):
                     points[i, 0] = raw[i].x / 100.0
                     points[i, 1] = raw[i].y / 100.0
                     points[i, 2] = raw[i].z / 100.0
                     points[i, 3] = raw[i].reflectivity
                     points[i, 4] = raw[i].tag
+                    points[i, 5] = base_ns + i * dt_ns
             else:
                 return
             self._point_queue.put_nowait((udp_cnt, points))
