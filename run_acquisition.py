@@ -2,35 +2,22 @@ import os
 import time
 import argparse
 import datetime
+from lidarpy.webcam import find_video_device, open_camera
 import numpy as np
 import cv2
-from csdk import CsdkLidar
+from lidarpy.csdk import CsdkLidar
 
 #!/usr/bin/env python3
 """run_acquisition.py — collect CsdkLidar points + Logitech Brio images."""
-
-
-# webcam via OpenCV (reliable for Logitech Brio)
-try:
-except Exception:
-    cv2 = None
-
-# try CsdkLidar from package
-try:
-except Exception:
-    CsdkLidar = None
-
 
 def init_camera(index, width=None, height=None):
     if cv2 is None:
         return None
     cap = cv2.VideoCapture(index, cv2.CAP_ANY)
+    dev = find_video_device(index)
+    cap = open_camera(dev)
     if not cap or not cap.isOpened():
         return None
-    if width:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
-    if height:
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
     return cap
 
 
@@ -57,10 +44,16 @@ def collect(args):
     os.makedirs(img_dir, exist_ok=True)
     os.makedirs(lidar_dir, exist_ok=True)
 
-    cap = init_camera(args.camera_index, args.cam_width, args.cam_height)
+    cap = init_camera(args.camera_index)
     if cap is None:
         print("no-camera")
-    lidar = init_lidar(config_path=args.config_path, host_ip=args.host_ip, sdk_lib_path=args.sdk_lib_path)
+    try:
+        lidar = init_lidar(config_path=args.config_path, host_ip=args.host_ip, sdk_lib_path=args.sdk_lib_path)
+        time.sleep(1)
+        lidar.get_frame(); # flush buffer
+    except Exception as e:
+        print(f"init_lidar error: {e}")
+        lidar = None
 
     i = 0
     start = time.time()
@@ -114,16 +107,16 @@ def parse_args():
     p = argparse.ArgumentParser(add_help=True)
     p.add_argument("--duration", "-d", type=float, default=0.0,
                    help="seconds to run (0 = until Ctrl-C)")
-    p.add_argument("--out-dir", "-o", default=None, help="output dir")
-    p.add_argument("--camera-index", type=int, default=0, help="cv2 camera index")
-    p.add_argument("--cam-width", type=int, default=1920, help="camera width")
-    p.add_argument("--cam-height", type=int, default=1080, help="camera height")
+    p.add_argument("-out_dir", "-o", default=None, help="output dir")
+    p.add_argument("--camera_index", type=str, default="046d:085e", help="cv2 camera index")
+    # p.add_argument("--cam-width", type=int, default=1920, help="camera width")
+    # p.add_argument("--cam-height", type=int, default=1080, help="camera height")
     p.add_argument("--fps", type=float, default=30.0, help="desired capture fps")
-    p.add_argument("--host_ip", default="192.168.100.75",
+    p.add_argument("--host_ip", default="192.168.100.5",
                     help="CsdkLidar host ip")
-    p.add_argument("sdk_lib_path",
+    p.add_argument("--sdk_lib_path",
                     default="/home/rfor10/Livox-SDK2/build/sdk_core/liblivox_lidar_sdk_shared.so", help = "path to built Livox SDK2 shared library")
-    p.add_argument("config_path", default = "hap_config.json", help="config JSON file for SDK initialization")
+    p.add_argument("--config_path", default = "hap_config.json", help="config JSON file for SDK initialization")
     return p.parse_args()
 
 
