@@ -1,0 +1,26 @@
+{
+    "master_sdk": true,
+    "lidar_log_enable": true,
+    "lidar_log_cache_size_MB": 500,
+    "lidar_log_path": "/home/rfor10/lidar_viewer/lidar_data/",
+    "HAP": {
+        "lidar_net_info": {
+            "cmd_data_port": 56000,
+            "push_msg_port": 0,
+            "point_data_port": 57000,
+            "imu_data_port": 58000,
+            "log_data_port": 59000
+        },
+        "host_net_info": [
+            {
+                "lidar_ip": "192.168.100.75",
+                "host_ip": "192.168.100.50",
+                "cmd_data_port": 56000,
+                "push_msg_port": 0,
+                "point_data_port": 57000,
+                "imu_data_port": 58000,
+                "log_data_port": 59000
+            }
+        ]
+    }
+}
