@@ -21,14 +21,14 @@ class HapLidar:
     """Blocking interface to a single Livox HAP LiDAR.
 
     Usage:
-        with HapLidar(host_ip="192.168.1.50") as lidar:
+        with HapLidar(host_ip="192.168.100.5") as lidar:
             lidar.connect()
             lidar.start()
             frame = lidar.get_frame()
             lidar.stop()
     """
 
-    def __init__(self, host_ip: str, ip: str = "192.168.1.100",
+    def __init__(self, host_ip: str, ip: str = "192.168.100.100",
                  cmd_port: int = Port.HAP_CMD,
                  point_port: int = Port.HAP_POINT):
         self.host_ip = host_ip
