@@ -114,8 +114,11 @@ class CsdkLidar:
     Requires config JSON file for SDK initialization.
     """
 
-    def __init__(self, config_path: str, host_ip: str = ""):
-        self._lib = ctypes.CDLL(_find_sdk_lib())
+    def __init__(self, config_path: str, host_ip: str = "", sdk_lib_path: str | None = None):
+        if sdk_lib_path is not None:
+            self._lib = ctypes.CDLL(sdk_lib_path)
+        else:
+            self._lib = ctypes.CDLL(_find_sdk_lib())
         self._config_path = config_path.encode()
         self._host_ip = host_ip.encode()
         self._point_queue: queue.Queue = queue.Queue(maxsize=1000)
