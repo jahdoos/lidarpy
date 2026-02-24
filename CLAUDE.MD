@@ -30,6 +30,9 @@ lidarpy/
 └── webcam.py            # USB webcam image capture (V4L2/OpenCV)
 tests/
 Livox-SDK2-master/       # C++ SDK reference
+data/                    # Output example data
+    ├── images/          # Images captured by webcam
+    ├── lidar/           # Lidar point load numpy npy files X (m), Y(m), Z(m), reflectivity, tag, timestamp (us)
 ```
 
 ## Commands

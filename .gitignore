@@ -7,3 +7,5 @@ build/
 *.so
 *.dylib
 .ipynb_checkpoints/
+data/
+.DS_Store
