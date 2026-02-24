@@ -6,6 +6,7 @@ Build: cd Livox-SDK2-master && mkdir build && cd build && cmake .. && make
 
 import ctypes
 import ctypes.util
+import json
 import os
 import sys
 import time
@@ -119,7 +120,8 @@ class CsdkLidar:
             self._lib = ctypes.CDLL(sdk_lib_path)
         else:
             self._lib = ctypes.CDLL(_find_sdk_lib())
-        self._config_path = config_path.encode()
+        # Resolve to absolute path so the C SDK can always find the file
+        self._config_path = str(Path(config_path).resolve()).encode()
         self._host_ip = host_ip.encode()
         self._point_queue: queue.Queue = queue.Queue(maxsize=1000)
         self._handle: int | None = None
@@ -156,8 +158,31 @@ class CsdkLidar:
         lib.DisableLivoxSdkConsoleLogger.argtypes = []
         lib.DisableLivoxSdkConsoleLogger.restype = None
 
+    def _validate_config(self):
+        """Pre-flight check on the JSON config file before calling the C SDK."""
+        cfg_path = self._config_path.decode()
+        if not Path(cfg_path).is_file():
+            raise FileNotFoundError(f"Config file not found: {cfg_path}")
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        log_enabled = cfg.get("lidar_log_enable", False)
+        if log_enabled:
+            log_path = cfg.get("lidar_log_path", "")
+            if log_path and not Path(log_path).is_dir():
+                raise FileNotFoundError(
+                    f"lidar_log_path directory does not exist: {log_path!r}  "
+                    f"(create it with: mkdir -p {log_path})"
+                )
+
     def connect(self, timeout: float = 10.0):
         """Init SDK and wait for device discovery."""
+        self._validate_config()
+
+        # Reset stale C SDK state — the global is_initialized flag persists
+        # across Python object lifetimes while the .so stays loaded.
+        self._lib.LivoxLidarSdkUninit()
+        self._initialized = False
+
         # Register callbacks BEFORE init — SDK threads start inside Init
         self._lib.SetLivoxLidarPointCloudCallBack(self._pcl_cb, None)
         self._lib.SetLivoxLidarInfoChangeCallback(self._info_cb, None)
