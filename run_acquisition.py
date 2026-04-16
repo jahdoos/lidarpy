@@ -13,12 +13,15 @@ from lidarpy.csdk import CsdkLidar
 def init_camera(index, width=None, height=None):
     if cv2 is None:
         return None
-    cap = cv2.VideoCapture(index, cv2.CAP_ANY)
-    dev = find_video_device(index)
-    cap = open_camera(dev)
-    if not cap or not cap.isOpened():
+    try:
+        dev = find_video_device(index)
+        if dev is None:
+            print(f"camera USB device {index!r} not found")
+            return None
+        return open_camera(dev)
+    except Exception as e:
+        print(f"camera init skipped: {e}")
         return None
-    return cap
 
 
 def init_lidar(**kwargs):
@@ -44,13 +47,16 @@ def collect(args):
     os.makedirs(img_dir, exist_ok=True)
     os.makedirs(lidar_dir, exist_ok=True)
 
-    cap = init_camera(args.camera_index)
-    if cap is None:
-        print("no-camera")
+    cap = None
+    if not args.no_camera:
+        cap = init_camera(args.camera_index)
+        if cap is None:
+            print("no-camera — continuing with lidar only")
     try:
         lidar = init_lidar(config_path=args.config_path, host_ip=args.host_ip, sdk_lib_path=args.sdk_lib_path)
-        time.sleep(1)
-        lidar.get_frame(); # flush buffer
+        if lidar is not None:
+            time.sleep(1)
+            lidar.get_frame()  # flush buffer
     except Exception as e:
         print(f"init_lidar error: {e}")
         lidar = None
@@ -78,6 +84,7 @@ def collect(args):
                     except Exception as e:
                         print(f"get_frame error: {e}")
                         pts = None
+                if pts is not None and pts.shape[0] > 0:
                     pts = pts[~(pts[:, :5].sum(axis=1)==0)]
                     np.save(os.path.join(lidar_dir, f"points_{i:06d}.npy"), np.asarray(pts))
             i += 1
@@ -112,6 +119,7 @@ def parse_args():
     # p.add_argument("--cam-width", type=int, default=1920, help="camera width")
     # p.add_argument("--cam-height", type=int, default=1080, help="camera height")
     p.add_argument("--fps", type=float, default=30.0, help="desired capture fps")
+    p.add_argument("--no-camera", action="store_true", help="skip webcam, lidar only")
     p.add_argument("--host_ip", default="192.168.100.5",
                     help="CsdkLidar host ip")
     p.add_argument("--sdk_lib_path",
