@@ -19,6 +19,7 @@ Usage from Python::
 from __future__ import annotations
 
 import argparse
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -99,8 +100,8 @@ class Collector:
     def grab(self, frame_timeout: float = 1.0) -> tuple[str, np.ndarray, np.ndarray]:
         """Acquire one synchronized (lidar frame, camera image) pair.
 
-        The webcam image is captured immediately before the lidar frame
-        so both represent approximately the same instant.
+        Webcam and lidar are captured concurrently via threads so both
+        sample approximately the same instant.
 
         Returns:
             (timestamp_str, points Nx6, image HxWx3)
@@ -108,13 +109,22 @@ class Collector:
         if self._lidar is None or self._cap is None:
             raise RuntimeError("call open() first")
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        points = None
 
+        def _grab_lidar():
+            nonlocal points
+            points = self._lidar.get_frame(timeout=frame_timeout)
+
+        lidar_thread = threading.Thread(target=_grab_lidar)
+        lidar_thread.start()
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         ret, image = self._cap.read()
         if not ret:
+            lidar_thread.join()
             raise RuntimeError("webcam frame grab failed")
 
-        points = self._lidar.get_frame(timeout=frame_timeout)
+        lidar_thread.join()
 
         return ts, points, image
 

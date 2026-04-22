@@ -1,14 +1,15 @@
+#!/usr/bin/env python3
+"""run_acquisition.py — collect CsdkLidar points + Logitech Brio images."""
+
 import os
 import time
 import argparse
 import datetime
+import threading
 from lidarpy.webcam import find_video_device, open_camera
 import numpy as np
 import cv2
 from lidarpy.csdk import CsdkLidar
-
-#!/usr/bin/env python3
-"""run_acquisition.py — collect CsdkLidar points + Logitech Brio images."""
 
 def init_camera(index, width=None, height=None):
     if cv2 is None:
@@ -62,24 +63,38 @@ def collect(args):
             if args.duration and (time.time() - start) >= args.duration:
                 break
             t = time.time()
-            # image
+
+            # Capture webcam + lidar concurrently so they sample the same instant
             frame = None
+            pts = None
+
+            def _grab_lidar():
+                nonlocal pts
+                try:
+                    pts = lidar.get_frame()
+                except Exception as e:
+                    print(f"get_frame error: {e}")
+
+            if lidar:
+                lidar_thread = threading.Thread(target=_grab_lidar)
+                lidar_thread.start()
+
             if cap:
                 ret, frame = cap.read()
-                if ret and frame is not None:
-                    fname = os.path.join(img_dir, f"frame_{i:06d}.jpg")
-                    cv2.imwrite(fname, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            # lidar
+
             if lidar:
-                pts = None
-                if hasattr(lidar, "get_frame"):
-                    try:
-                        pts = lidar.get_frame()
-                    except Exception as e:
-                        print(f"get_frame error: {e}")
-                        pts = None
-                    pts = pts[~(pts[:, :5].sum(axis=1)==0)]
-                    np.save(os.path.join(lidar_dir, f"points_{i:06d}.npy"), np.asarray(pts))
+                lidar_thread.join()
+
+            # Save image
+            if cap and frame is not None:
+                fname = os.path.join(img_dir, f"frame_{i:06d}.jpg")
+                cv2.imwrite(fname, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+
+            # Save lidar
+            if lidar and pts is not None and pts.shape[0] > 0:
+                pts = pts[~(pts[:, :5].sum(axis=1) == 0)]
+                np.save(os.path.join(lidar_dir, f"points_{i:06d}.npy"), np.asarray(pts))
+
             i += 1
             # throttle by frame rate if given
             if args.fps and args.fps > 0:
