@@ -38,16 +38,29 @@ def _scale_to_255(a, mn, mx, gamma=1.0, clip_hi_pct=None):
     return (norm * 255).astype(np.uint8)
 
 
-def front_view(points, val="depth", h_res=0.2, v_res=0.2,
+def front_view(points, val="reflectance", h_res=0.2, v_res=0.2,
                h_fov=(-60, 60), v_fov=(-15, 15), y_fudge=3,
-               gamma=1.0, clip_hi_pct=None):
-    """Angular front-view projection of Nx6 lidar frame to HxW uint8."""
+               gamma=1.0, clip_hi_pct=None, agg="max",
+               refl_range=(0.0, 255.0)):
+    """Angular front-view projection of Nx6 lidar frame to HxW uint8.
+
+    Camera convention: +y (left of sensor) → left of image.
+
+    Args:
+        val: "reflectance" (default), "depth", or "height".
+        agg: "max" (default, brightest wins — best for sparse retroreflective
+             hits), "min" (closest wins, useful for depth), or "last"
+             (legacy last-write-wins scatter).
+        refl_range: fixed (min, max) for reflectance scaling — Livox refl is
+             0-255 native, so use absolute range to avoid per-frame washout
+             of bright targets.
+    """
     pts = _filter_nonzero(points)
     if len(pts) == 0:
         return np.zeros((10, 10), dtype=np.uint8)
     x, y, z, refl = pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3]
     d_xy = np.sqrt(x ** 2 + y ** 2)
-    az = np.degrees(np.arctan2(y, x))
+    az = -np.degrees(np.arctan2(y, x))   # camera convention
     el = np.degrees(np.arctan2(z, d_xy))
     xi = ((az - h_fov[0]) / h_res).astype(np.int32)
     yi = ((el - v_fov[0]) / v_res).astype(np.int32)
@@ -55,15 +68,31 @@ def front_view(points, val="depth", h_res=0.2, v_res=0.2,
     h = int(np.ceil((v_fov[1] - v_fov[0]) / v_res)) + y_fudge
     ok = (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
     xi, yi, refl, z_v, d_v = xi[ok], yi[ok], refl[ok], z[ok], d_xy[ok]
+
     if val == "reflectance":
-        pv, mn, mx = refl, 0, max(refl.max() if refl.size else 1, 1)
+        pv, mn, mx = refl, refl_range[0], refl_range[1]
     elif val == "height":
         pv, mn, mx = z_v, z_v.min() if z_v.size else 0, z_v.max() if z_v.size else 1
     else:
         pv, mn, mx = d_v, d_v.min() if d_v.size else 0, d_v.max() if d_v.size else 1
+
+    scaled = _scale_to_255(pv, mn, mx, gamma, clip_hi_pct) if xi.size else np.array([], dtype=np.uint8)
+
     img = np.zeros((h, w), dtype=np.uint8)
     if xi.size:
-        img[h - 1 - yi, xi] = _scale_to_255(pv, mn, mx, gamma, clip_hi_pct)
+        rows, cols = h - 1 - yi, xi
+        if agg == "max":
+            np.maximum.at(img, (rows, cols), scaled)
+        elif agg == "min":
+            # invert so "min raw value" → "max brightness" → max-aggregation
+            tmp = np.zeros((h, w), dtype=np.uint8)
+            np.maximum.at(tmp, (rows, cols), 255 - scaled)
+            # keep only touched pixels; untouched stay 0
+            touched = np.zeros((h, w), dtype=bool)
+            touched[rows, cols] = True
+            img = np.where(touched, tmp, 0).astype(np.uint8)
+        else:  # "last"
+            img[rows, cols] = scaled
     return img
 
 
@@ -135,18 +164,23 @@ def pair_files(run_dir: Path) -> list[tuple[Path, Path]]:
 
 def render_lidar(frame: np.ndarray, view: str,
                  gamma: float = 1.0, clip_hi_pct: float | None = None,
+                 val: str = "reflectance", agg: str = "max",
                 ) -> tuple[np.ndarray, str]:
     """Project Nx6 lidar frame to 2D image; return (img, cmap).
 
+    val: "reflectance" (default — brightness = return strength), "depth", "height".
+    agg: "max" (default — brightest return wins per pixel) | "min" | "last".
     gamma<1 boosts low-end detail. clip_hi_pct (e.g. 99) compresses bright outliers.
     """
-    kw = dict(gamma=gamma, clip_hi_pct=clip_hi_pct)
     if view == "front":
-        return front_view(frame, val="depth", **kw), "jet"
+        img = front_view(frame, val=val, gamma=gamma, clip_hi_pct=clip_hi_pct, agg=agg)
+        cmap = "gray" if val == "reflectance" else "jet"
+        return img, cmap
     if view == "pano":
-        return panorama(frame, **kw), "jet"
+        return panorama(frame, gamma=gamma, clip_hi_pct=clip_hi_pct), "jet"
     if view == "bev":
-        return birds_eye_view(frame, side_range=(-10, 10), fwd_range=(0, 20), **kw), "gray"
+        return birds_eye_view(frame, side_range=(-10, 10), fwd_range=(0, 20),
+                              gamma=gamma, clip_hi_pct=clip_hi_pct), "gray"
     raise ValueError(f"unknown view: {view}")
 
 
