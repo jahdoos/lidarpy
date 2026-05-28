@@ -40,31 +40,17 @@ def init_lidar(**kwargs):
         return None
 
 
-def lidar_accumulator(lidar, lidar_dir, integration_s, stop_event):
-    """Continuously read lidar frames and save accumulated point clouds.
-
-    Saves one .npy every `integration_s` seconds containing all points
-    captured during that window. Runs independently of the camera loop.
-    """
-    i = 0
+def lidar_reader(lidar, buffer, lock, stop_event):
+    """Continuously read lidar frames into a shared buffer."""
     while not stop_event.is_set():
-        window_start = time.time()
-        chunks = []
-        while not stop_event.is_set() and (time.time() - window_start) < integration_s:
-            try:
-                pts = lidar.get_frame()
-            except Exception as e:
-                print(f"get_frame error: {e}")
-                pts = None
-            if pts is not None and pts.shape[0] > 0:
-                chunks.append(pts)
-        if not chunks:
-            continue
-        merged = np.vstack(chunks)
-        merged = merged[~(merged[:, :5].sum(axis=1) == 0)]
-        fname = os.path.join(lidar_dir, f"points_{i:06d}.npy")
-        np.save(fname, merged)
-        i += 1
+        try:
+            pts = lidar.get_frame()
+        except Exception as e:
+            print(f"get_frame error: {e}")
+            pts = None
+        if pts is not None and pts.shape[0] > 0:
+            with lock:
+                buffer.append(pts)
 
 
 def collect(args):
@@ -91,10 +77,12 @@ def collect(args):
 
     stop_event = threading.Event()
     lidar_thread = None
+    lidar_buffer = []
+    lidar_lock = threading.Lock()
     if lidar is not None:
         lidar_thread = threading.Thread(
-            target=lidar_accumulator,
-            args=(lidar, lidar_dir, args.integration, stop_event),
+            target=lidar_reader,
+            args=(lidar, lidar_buffer, lidar_lock, stop_event),
             daemon=True,
         )
         lidar_thread.start()
@@ -111,17 +99,26 @@ def collect(args):
                 if ret and frame is not None:
                     fname = os.path.join(img_dir, f"frame_{i:06d}.jpg")
                     cv2.imwrite(fname, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if lidar is not None:
+                with lidar_lock:
+                    chunks = lidar_buffer.copy()
+                    lidar_buffer.clear()
+                if chunks:
+                    merged = np.vstack(chunks)
+                    merged = merged[~(merged[:, :5].sum(axis=1) == 0)]
+                    if merged.shape[0] > 0:
+                        np.save(os.path.join(lidar_dir, f"points_{i:06d}.npy"), merged)
             i += 1
             if args.fps and args.fps > 0:
                 time.sleep(max(0, 1.0 / args.fps - (time.time() - t)))
-            elif not cap:
-                time.sleep(0.05)  # no camera, no fps cap — don't busy-spin
+            elif not cap and lidar is None:
+                break
     except KeyboardInterrupt:
         pass
     finally:
         stop_event.set()
         if lidar_thread is not None:
-            lidar_thread.join(timeout=max(2.0, args.integration + 1.0))
+            lidar_thread.join(timeout=2.0)
         if cap:
             try:
                 cap.release()
@@ -146,9 +143,7 @@ def parse_args():
     p.add_argument("--camera_index", type=str, default="046d:085e", help="cv2 camera index")
     # p.add_argument("--cam-width", type=int, default=1920, help="camera width")
     # p.add_argument("--cam-height", type=int, default=1080, help="camera height")
-    p.add_argument("--fps", type=float, default=30.0, help="desired camera capture fps")
-    p.add_argument("--integration", type=float, default=1.0,
-                   help="lidar accumulation window in seconds (one .npy per window)")
+    p.add_argument("--fps", type=float, default=30.0, help="capture rate — camera and lidar save once per tick")
     p.add_argument("--no-camera", action="store_true", help="skip webcam, lidar only")
     p.add_argument("--host_ip", default="192.168.100.5",
                     help="CsdkLidar host ip")
