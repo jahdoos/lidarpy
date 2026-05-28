@@ -14,12 +14,15 @@ from lidarpy.csdk import CsdkLidar
 def init_camera(index, width=None, height=None):
     if cv2 is None:
         return None
-    cap = cv2.VideoCapture(index, cv2.CAP_ANY)
-    dev = find_video_device(index)
-    cap = open_camera(dev)
-    if not cap or not cap.isOpened():
+    try:
+        dev = find_video_device(index)
+        if dev is None:
+            print(f"camera USB device {index!r} not found")
+            return None
+        return open_camera(dev)
+    except Exception as e:
+        print(f"camera init skipped: {e}")
         return None
-    return cap
 
 
 def init_lidar(**kwargs):
@@ -37,6 +40,19 @@ def init_lidar(**kwargs):
         return None
 
 
+def lidar_reader(lidar, buffer, lock, stop_event):
+    """Continuously read lidar frames into a shared buffer."""
+    while not stop_event.is_set():
+        try:
+            pts = lidar.get_frame()
+        except Exception as e:
+            print(f"get_frame error: {e}")
+            pts = None
+        if pts is not None and pts.shape[0] > 0:
+            with lock:
+                buffer.append(pts)
+
+
 def collect(args):
     ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
     out = os.path.abspath(args.out_dir or f"acq_{ts}")
@@ -45,16 +61,31 @@ def collect(args):
     os.makedirs(img_dir, exist_ok=True)
     os.makedirs(lidar_dir, exist_ok=True)
 
-    cap = init_camera(args.camera_index)
-    if cap is None:
-        print("no-camera")
+    cap = None
+    if not args.no_camera:
+        cap = init_camera(args.camera_index)
+        if cap is None:
+            print("no-camera — continuing with lidar only")
     try:
         lidar = init_lidar(config_path=args.config_path, host_ip=args.host_ip, sdk_lib_path=args.sdk_lib_path)
-        time.sleep(1)
-        lidar.get_frame(); # flush buffer
+        if lidar is not None:
+            time.sleep(1)
+            lidar.get_frame()  # flush buffer
     except Exception as e:
         print(f"init_lidar error: {e}")
         lidar = None
+
+    stop_event = threading.Event()
+    lidar_thread = None
+    lidar_buffer = []
+    lidar_lock = threading.Lock()
+    if lidar is not None:
+        lidar_thread = threading.Thread(
+            target=lidar_reader,
+            args=(lidar, lidar_buffer, lidar_lock, stop_event),
+            daemon=True,
+        )
+        lidar_thread.start()
 
     i = 0
     start = time.time()
@@ -63,45 +94,31 @@ def collect(args):
             if args.duration and (time.time() - start) >= args.duration:
                 break
             t = time.time()
-
-            # Capture webcam + lidar concurrently so they sample the same instant
-            frame = None
-            pts = None
-
-            def _grab_lidar():
-                nonlocal pts
-                try:
-                    pts = lidar.get_frame()
-                except Exception as e:
-                    print(f"get_frame error: {e}")
-
-            if lidar:
-                lidar_thread = threading.Thread(target=_grab_lidar)
-                lidar_thread.start()
-
             if cap:
                 ret, frame = cap.read()
-
-            if lidar:
-                lidar_thread.join()
-
-            # Save image
-            if cap and frame is not None:
-                fname = os.path.join(img_dir, f"frame_{i:06d}.jpg")
-                cv2.imwrite(fname, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-
-            # Save lidar
-            if lidar and pts is not None and pts.shape[0] > 0:
-                pts = pts[~(pts[:, :5].sum(axis=1) == 0)]
-                np.save(os.path.join(lidar_dir, f"points_{i:06d}.npy"), np.asarray(pts))
-
+                if ret and frame is not None:
+                    fname = os.path.join(img_dir, f"frame_{i:06d}.jpg")
+                    cv2.imwrite(fname, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if lidar is not None:
+                with lidar_lock:
+                    chunks = lidar_buffer.copy()
+                    lidar_buffer.clear()
+                if chunks:
+                    merged = np.vstack(chunks)
+                    merged = merged[~(merged[:, :5].sum(axis=1) == 0)]
+                    if merged.shape[0] > 0:
+                        np.save(os.path.join(lidar_dir, f"points_{i:06d}.npy"), merged)
             i += 1
-            # throttle by frame rate if given
             if args.fps and args.fps > 0:
                 time.sleep(max(0, 1.0 / args.fps - (time.time() - t)))
+            elif not cap and lidar is None:
+                break
     except KeyboardInterrupt:
         pass
     finally:
+        stop_event.set()
+        if lidar_thread is not None:
+            lidar_thread.join(timeout=2.0)
         if cap:
             try:
                 cap.release()
@@ -126,7 +143,8 @@ def parse_args():
     p.add_argument("--camera_index", type=str, default="046d:085e", help="cv2 camera index")
     # p.add_argument("--cam-width", type=int, default=1920, help="camera width")
     # p.add_argument("--cam-height", type=int, default=1080, help="camera height")
-    p.add_argument("--fps", type=float, default=30.0, help="desired capture fps")
+    p.add_argument("--fps", type=float, default=30.0, help="capture rate — camera and lidar save once per tick")
+    p.add_argument("--no-camera", action="store_true", help="skip webcam, lidar only")
     p.add_argument("--host_ip", default="192.168.100.5",
                     help="CsdkLidar host ip")
     p.add_argument("--sdk_lib_path",
